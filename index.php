@@ -2,12 +2,78 @@
 // Configuration
 require_once 'vendor/autoload.php'; // Include the Google API PHP Client Library
 
-// Set up the Google Sheets API credentials
+// Set up the Google Sheets API with OAuth2
 $client = new Google_Client();
 $client->setApplicationName('Leave Management System');
-$client->setScopes([Google_Service_Sheets::SPREADSHEETS]);
-$client->setAuthConfig('credentials.json'); // You need to download this from Google Cloud Console
+$client->setScopes([
+    Google_Service_Sheets::SPREADSHEETS, // Full access is needed for appending/editing
+]);
+
+// Add token-based authentication
+$tokenPath = 'token.json';
+
+// First, try to use service account if available
+$keyFilePath = 'credentials.json'; // Download this from Google Cloud Console
+if (file_exists($keyFilePath)) {
+    $client->setAuthConfig($keyFilePath);
+    error_log("Service account credentials loaded successfully");
+} else {
+    error_log("Service account credentials file not found at path: " . $keyFilePath);
+    
+    // If service account not found, try OAuth token
+    if (file_exists($tokenPath)) {
+        $accessToken = json_decode(file_get_contents($tokenPath), true);
+        $client->setAccessToken($accessToken);
+        error_log("OAuth token loaded successfully");
+    }
+    
+    // If token exists but is expired
+    if ($client->isAccessTokenExpired()) {
+        // If we have a refresh token, use it to get a new access token
+        if ($client->getRefreshToken()) {
+            error_log("Refreshing expired token");
+            $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+            file_put_contents($tokenPath, json_encode($client->getAccessToken()));
+        } else {
+            // If no valid authentication method is available, provide instructions
+            error_log("No valid authentication method found");
+            if (!isset($_GET['code'])) {
+                // Redirect for OAuth authorization if this is not a callback
+                if (!isset($_GET['action'])) { // Only redirect if this is a page load, not an AJAX call
+                    // Set up OAuth
+                    $client->setRedirectUri('http://' . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']);
+                    $client->setAccessType('offline');
+                    $client->setPrompt('consent'); // Force to choose account and generate refresh token
+                    
+                    // Generate authorization URL
+                    $authUrl = $client->createAuthUrl();
+                    header('Location: ' . filter_var($authUrl, FILTER_SANITIZE_URL));
+                    exit;
+                }
+            } else {
+                // Handle OAuth callback
+                $authCode = $_GET['code'];
+                $accessToken = $client->fetchAccessTokenWithAuthCode($authCode);
+                $client->setAccessToken($accessToken);
+                
+                // Save the token to file
+                if (!isset($accessToken['error'])) {
+                    file_put_contents($tokenPath, json_encode($accessToken));
+                    header('Location: ' . $_SERVER['PHP_SELF']);
+                    exit;
+                }
+            }
+        }
+    }
+}
+
+// Set access type to offline to get refresh token
 $client->setAccessType('offline');
+
+// Initialize services
+$service = new Google_Service_Sheets($client);
+
+// Rest of your code remains the same...
 
 // Define company spreadsheet IDs
 $companySheets = [
